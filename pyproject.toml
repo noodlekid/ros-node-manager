@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "ros-node-manager"
+version = "0.1.0"
+description = "A ROS2 Humble node process manager"
+authors = ["Mateusz Tyc <tycmat9@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+fastapi = "^0.115.5"
+uvicorn = "^0.32.0"
+
+[tool.poetry.group.dev.dependencies]
+black = { git = "https://github.com/psf/black"}
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
