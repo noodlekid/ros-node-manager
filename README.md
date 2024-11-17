@@ -48,7 +48,9 @@ See the example in the usage section.
 #### /nodes/terminate
 POST requests with a single parameter for the name of the node. You can hit this endpoint by writing a simple query like this:
 
+```bash
 curl -X POST "http://localhost:8000/nodes/terminate?name=test_node"
+```
 Termination of nodes can only occur if they were started using this node manager.
 
 #### /nodes/{name}/status
