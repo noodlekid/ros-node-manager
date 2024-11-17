@@ -32,5 +32,4 @@ RUN /bin/bash -c 'poetry install --no-dev --no-root'
 
 COPY . .
 
-
 ENTRYPOINT [ "/bin/bash", "-c", "poetry run uvicorn ros_node_manager.main:app --host=0.0.0.0" ]

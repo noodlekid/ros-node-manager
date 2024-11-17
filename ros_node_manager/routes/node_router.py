@@ -29,7 +29,7 @@ async def terminate_node(name: str):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detial=f"Failed to launch node: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to launch node: {e}")
 
 @router.get("/{name}/status")
 async def get_node_status(name: str):
