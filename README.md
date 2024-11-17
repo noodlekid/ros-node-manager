@@ -21,6 +21,7 @@ This program leverages the Poetry dependency manager, and its use is encouraged 
 
 1. Python 3.12
 2. [Poetry](https://python-poetry.org/docs/#installing-with-the-official-installer)
+3. ROS2 Humble (has only been tested with humble)
 
 ### Usage
 
