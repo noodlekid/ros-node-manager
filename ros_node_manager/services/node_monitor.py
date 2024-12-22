@@ -2,9 +2,10 @@ import io
 import os
 import selectors
 import logging
+import subprocess
 import threading
 import psutil
-from typing import cast
+from typing import Union, cast
 
 from ros_node_manager.models.node_info import NodeInfo, NodeEvent
 
@@ -63,14 +64,21 @@ class NodeMonitor:
             pass
 
     def _detect_unexpected_stop(self, nodes: dict[str, NodeInfo], node_info: NodeInfo):
-        all_procs = [node_info.process] + node_info.child_processes
-        # If they all have .poll() != None, they're dead
-        if all(proc.poll() is not None for proc in all_procs):
+        all_dead = all(self.is_dead(p) for p in ([node_info.process] + node_info.child_processes))
+        if all_dead:
             msg = f"Node '{node_info.name}' has stopped unexpectedly."
             logger.warning(msg)
             node_info.events_queue.put(NodeEvent(type_="status", message=msg))
             # Remove from registry
             nodes.pop(node_info.name, None)
+
+    def is_dead(self, proc: Union[psutil.Process, subprocess.Popen[str]]) -> bool:
+        """
+        Returns True if the process is dead, False otherwise.
+        """
+        if isinstance(proc, psutil.Process):
+            return (not proc.is_running())
+        return (proc.poll() is not None)
 
 
 class OutputMonitor:
