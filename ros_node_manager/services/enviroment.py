@@ -4,15 +4,16 @@ import subprocess
 
 logger = logging.getLogger(__name__)
 
+
 def merge_ros_env_with_system() -> dict[str, str]:
     """
-    Returns a dictionary that merges system environment variables with 
+    Returns a dictionary that merges system environment variables with
     the base ROS environment variables.
     """
-    base_env = _get_ros_env(ros_distro= "humble")
+    base_env = _get_ros_env(ros_distro="humble")
     final_env = os.environ.copy()
     final_env.update(base_env)
-    
+
     logger.debug("Merged ROS environment with system environment.")
     return final_env
 

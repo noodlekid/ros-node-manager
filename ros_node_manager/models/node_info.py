@@ -5,11 +5,13 @@ from queue import Queue
 import subprocess
 import psutil
 
+
 @dataclass
 class NodeEvent:
     type_: str
     message: str
     stream: Optional[str] = None
+
 
 @dataclass
 class NodeInfo:

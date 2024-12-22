@@ -18,12 +18,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 class VerbosityLevels(IntEnum):
     NORMAL = 1
     DEBUG = 2
 
+
 class NodeManager:
-    def __init__(self, default_timeout: float = 5.0, monitor_interval: float = 1.0, verbosity: int = 0):
+    def __init__(
+        self,
+        default_timeout: float = 5.0,
+        monitor_interval: float = 1.0,
+        verbosity: int = 0,
+    ):
         self.nodes: Dict[str, NodeInfo] = {}
         self._lock = threading.Lock()
 
@@ -32,9 +39,7 @@ class NodeManager:
         self.output_monitor = OutputMonitor()
         self.verbosity = verbosity
 
-        self.monitor_thread = threading.Thread(
-            target=self._monitor_worker, daemon=True
-        )
+        self.monitor_thread = threading.Thread(target=self._monitor_worker, daemon=True)
         self.monitor_thread.start()
         logger.info("NodeManager initialized.")
 
@@ -56,14 +61,14 @@ class NodeManager:
         with self._lock:
             if name in self.nodes:
                 raise RuntimeError(f"Node '{name}' is already running.")
-            
+
             node_info = self.launcher.launch_node(
                 name=name,
                 package=package,
                 executable=executable,
                 launch_file=launch_file,
-                parameters=parameters, 
-                timeout=timeout
+                parameters=parameters,
+                timeout=timeout,
             )
             self.nodes[name] = node_info
 
@@ -71,12 +76,10 @@ class NodeManager:
                 self.output_monitor.start_capture(node_info)
 
             return node_info
-    
+
     def list_nodes(self) -> list[str]:
         with self._lock:
             return list(self.nodes.keys())
-        
-    
 
     def terminate_node(self, name: str, grace_timeout: float = 5.0):
         """
@@ -96,7 +99,7 @@ class NodeManager:
         logger.info(f"Terminating node '{name}' (PID={process.pid})")
 
         try:
-            # ROS2 processes attach a SIGINT handler, so we send SIGINT 
+            # ROS2 processes attach a SIGINT handler, so we send SIGINT
             for child in child_processes:
                 if child.is_running():
                     try:
@@ -116,9 +119,13 @@ class NodeManager:
 
                 ret_code = process.wait(timeout=grace_timeout)
                 logger.info(f"[{name}] Terminated gracefully with exit code={ret_code}")
-                events_queue.put(NodeEvent(type_="status", message="Terminated gracefully."))
+                events_queue.put(
+                    NodeEvent(type_="status", message="Terminated gracefully.")
+                )
             except subprocess.TimeoutExpired:
-                logger.warning(f"[{name}] Did not terminate in {grace_timeout}s, sending SIGKILL.")
+                logger.warning(
+                    f"[{name}] Did not terminate in {grace_timeout}s, sending SIGKILL."
+                )
                 try:
                     os.killpg(pgid, signal.SIGKILL)
                     process.wait()
@@ -126,7 +133,9 @@ class NodeManager:
                     logger.exception(f"[{name}] Failed to force-kill: {e}")
                 else:
                     logger.info(f"[{name}] Forcefully ki lled.")
-                    events_queue.put(NodeEvent(type_="status", message="Terminated forcefully."))
+                    events_queue.put(
+                        NodeEvent(type_="status", message="Terminated forcefully.")
+                    )
             except psutil.NoSuchProcess:
                 logger.info(f"[{name}] Already gone before SIGINT.")
             except ProcessLookupError:
@@ -148,7 +157,6 @@ class NodeManager:
                 self.nodes.pop(name, None)
                 logger.info(f"[{name}] Removed from registry after termination.")
 
-    
     def get_node_status(self, name: str) -> list[NodeEvent]:
         with self._lock:
             if name not in self.nodes:
@@ -159,4 +167,3 @@ class NodeManager:
         while not events_queue.empty():
             messages.append(events_queue.get_nowait())
         return messages
-
