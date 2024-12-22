@@ -124,7 +124,7 @@ class NodeManager:
                 except Exception as e:
                     logger.exception(f"[{name}] Failed to force-kill: {e}")
                 else:
-                    logger.info(f"[{name}] Forcefully killed.")
+                    logger.info(f"[{name}] Forcefully ki lled.")
                     events_queue.put(NodeEvent(type_="status", message="Terminated forcefully."))
             except psutil.NoSuchProcess:
                 logger.info(f"[{name}] Already gone before SIGINT.")
@@ -149,7 +149,7 @@ class NodeManager:
                 logger.info(f"[{name}] Removed from registry after termination.")
 
     
-    def get_node_events(self, name: str) -> list[NodeEvent]:
+    def get_node_status(self, name: str) -> list[NodeEvent]:
         with self._lock:
             if name not in self.nodes:
                 raise ValueError(f"Node '{name}' is not running.")
