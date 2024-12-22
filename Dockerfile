@@ -12,14 +12,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git mecab-ipadic-utf8 \
     && rm -rf /var/lib/apt/lists/*
 
+
 # Create and set the home directory
 ENV HOME="/root"
 WORKDIR ${HOME}
 
+
 # Install pyenv
 RUN git clone --depth=1 https://github.com/pyenv/pyenv.git ${HOME}/.pyenv
 
-# Set environment variables for pyenv
 ENV PYENV_ROOT="${HOME}/.pyenv"
 ENV PATH="${PYENV_ROOT}/bin:${PYENV_ROOT}/shims:${PATH}"
 
@@ -31,6 +32,7 @@ RUN curl -sSL https://install.python-poetry.org | python3 - && \
     ln -s ${HOME}/.local/bin/poetry /usr/local/bin/poetry
 
 # Set environment variables for Poetry
+
 ENV POETRY_NO_INTERACTION=1 \
     POETRY_VIRTUALENVS_IN_PROJECT=1 \
     POETRY_VIRTUALENVS_CREATE=1 \
@@ -41,7 +43,8 @@ ENV POETRY_NO_INTERACTION=1 \
 WORKDIR /app
 
 # Copy only the dependency files to leverage Docker cache
-COPY poetry.lock pyproject.toml ./
+RUN poetry install --no-dev --no-root
+
 
 # Install Python dependencies without installing the current project
 RUN poetry install --no-dev

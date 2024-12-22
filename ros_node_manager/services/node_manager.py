@@ -7,8 +7,8 @@ import signal
 import logging
 import time
 from typing import Dict, Optional
-
 from enum import IntEnum
+
 from ros_node_manager.services.node_launcher import NodeLauncher
 from ros_node_manager.services.node_monitor import NodeMonitor, OutputMonitor
 from ros_node_manager.models import NodeInfo, NodeEvent
@@ -23,7 +23,7 @@ class VerbosityLevels(IntEnum):
     DEBUG = 2
 
 class NodeManager:
-    def __init__(self, default_timeout: float = 5.0, monitor_interval: float = 5.0, verbosity: int = 0):
+    def __init__(self, default_timeout: float = 5.0, monitor_interval: float = 1.0, verbosity: int = 0):
         self.nodes: Dict[str, NodeInfo] = {}
         self._lock = threading.Lock()
 
@@ -96,10 +96,11 @@ class NodeManager:
         logger.info(f"Terminating node '{name}' (PID={process.pid})")
 
         try:
-            # 1) SIGINT to children
+            # ROS2 processes attach a SIGINT handler, so we send SIGINT 
             for child in child_processes:
                 if child.is_running():
                     try:
+                        # Death to children 💀
                         child.send_signal(signal.SIGINT)
                         logger.debug(f"[{name}] Sent SIGINT to child PID={child.pid}")
                     except psutil.NoSuchProcess:
@@ -107,7 +108,7 @@ class NodeManager:
                     except Exception as e:
                         logger.exception(f"[{name}] Error sending SIGINT to child: {e}")
 
-            # 2) SIGINT to parent process group
+            # SIGINT parent 💀
             try:
                 pgid = os.getpgid(process.pid)
                 os.killpg(pgid, signal.SIGINT)
@@ -120,7 +121,7 @@ class NodeManager:
                 logger.warning(f"[{name}] Did not terminate in {grace_timeout}s, sending SIGKILL.")
                 try:
                     os.killpg(pgid, signal.SIGKILL)
-                    process.wait()  # wait for kill
+                    process.wait()
                 except Exception as e:
                     logger.exception(f"[{name}] Failed to force-kill: {e}")
                 else:
@@ -133,7 +134,7 @@ class NodeManager:
             except Exception as e:
                 logger.exception(f"[{name}] Unexpected error during termination: {e}")
 
-            # 3) Ensure child processes are not still running
+            # forcefully kill the children
             for child in child_processes:
                 if child.is_running():
                     try:
@@ -143,7 +144,6 @@ class NodeManager:
                         pass
 
         finally:
-            # Clean up
             with self._lock:
                 self.nodes.pop(name, None)
                 logger.info(f"[{name}] Removed from registry after termination.")
@@ -159,3 +159,4 @@ class NodeManager:
         while not events_queue.empty():
             messages.append(events_queue.get_nowait())
         return messages
+
