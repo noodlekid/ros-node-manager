@@ -9,9 +9,7 @@ A utility for managing ROS2 node processes remotely through a web API using Fast
 - List all managed nodes
 
 ## TODO
-1. Fault recovery
-2. Syncing preexisting nodes
-3. API reference document
+API reference document
 
 ## Installation
 
