@@ -115,7 +115,7 @@ class NodeManager:
 
                 ret_code = process.wait(timeout=grace_timeout)
                 logger.info(f"[{name}] Terminated gracefully with exit code={ret_code}")
-                events_queue.put(NodeEvent(type="status", message="Terminated gracefully."))
+                events_queue.put(NodeEvent(type_="status", message="Terminated gracefully."))
             except subprocess.TimeoutExpired:
                 logger.warning(f"[{name}] Did not terminate in {grace_timeout}s, sending SIGKILL.")
                 try:
@@ -125,7 +125,7 @@ class NodeManager:
                     logger.exception(f"[{name}] Failed to force-kill: {e}")
                 else:
                     logger.info(f"[{name}] Forcefully killed.")
-                    events_queue.put(NodeEvent(type="status", message="Terminated forcefully."))
+                    events_queue.put(NodeEvent(type_="status", message="Terminated forcefully."))
             except psutil.NoSuchProcess:
                 logger.info(f"[{name}] Already gone before SIGINT.")
             except ProcessLookupError:
