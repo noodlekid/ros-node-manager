@@ -1,34 +1,30 @@
-import threading
-import subprocess
-import psutil
-
 import os
-import signal
-import logging
+import subprocess
+import threading
 import time
+import psutil
+import logging
 from typing import Dict, Optional
-from enum import IntEnum
-
-from ros_node_manager.services.node_launcher import NodeLauncher
-from ros_node_manager.services.node_monitor import NodeMonitor, OutputMonitor
 from ros_node_manager.models import NodeInfo, NodeEvent
+from ros_node_manager.services.node_launcher import NodeLauncher
+from ros_node_manager.services.node_status_monitor import NodeMonitor
+from ros_node_manager.services.node_output_monitor import OutputMonitor
 
-logging.basicConfig(
-    level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s"
-)
+import signal
+
 logger = logging.getLogger(__name__)
 
 
-class VerbosityLevels(IntEnum):
-    NORMAL = 1
-    DEBUG = 2
-
-
 class NodeManager:
+    """
+    High-level orchestrator for node launching, termination,
+    and background monitoring.
+    """
+
     def __init__(
         self,
         default_timeout: float = 5.0,
-        monitor_interval: float = 1.0,
+        monitor_interval: float = 3.0,
         verbosity: int = 0,
     ):
         self.nodes: Dict[str, NodeInfo] = {}
@@ -36,14 +32,14 @@ class NodeManager:
 
         self.launcher = NodeLauncher(default_timeout=default_timeout)
         self.monitor = NodeMonitor(interval=monitor_interval)
-        self.output_monitor = OutputMonitor()
+        self.output_monitor = OutputMonitor()  # optional
         self.verbosity = verbosity
 
-        self.monitor_thread = threading.Thread(target=self._monitor_worker, daemon=True)
-        self.monitor_thread.start()
+        self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self._monitor_thread.start()
         logger.info("NodeManager initialized.")
 
-    def _monitor_worker(self):
+    def _monitor_loop(self):
         while True:
             time.sleep(self.monitor.interval)
             with self._lock:
@@ -61,7 +57,6 @@ class NodeManager:
         with self._lock:
             if name in self.nodes:
                 raise RuntimeError(f"Node '{name}' is already running.")
-
             node_info = self.launcher.launch_node(
                 name=name,
                 package=package,
@@ -72,98 +67,69 @@ class NodeManager:
             )
             self.nodes[name] = node_info
 
-            if self.verbosity > VerbosityLevels.NORMAL:
-                self.output_monitor.start_capture(node_info)
+        # Start capturing stdout/stderr only if verbosity is high
+        if self.verbosity > 1 and hasattr(self, "output_monitor"):
+            self.output_monitor.start_capture(node_info)
 
-            return node_info
+        return node_info
+
+    def terminate_node(self, name: str, grace_timeout: float = 5.0):
+        with self._lock:
+            if name not in self.nodes:
+                logger.warning(f"Node '{name}' not found.")
+                return
+            node_info = self.nodes[name]
+
+        self._terminate_process_tree(node_info, grace_timeout)
+        with self._lock:
+            self.nodes.pop(name, None)
+            logger.info(f"[{name}] Removed from registry after termination.")
+
+    def _terminate_process_tree(self, node_info: NodeInfo, grace_timeout: float):
+        main_proc = node_info.process
+        children = node_info.child_processes
+        logger.info(f"Terminating '{node_info.name}' (PID={main_proc.pid})")
+
+        # Send SIGINT to children first
+        for child in children:
+            try:
+                if child.is_running():
+                    child.send_signal(signal.SIGINT)
+            except Exception as e:
+                logger.exception(f"Error sending SIGINT to child {child.pid}: {e}")
+
+        # SIGINT the parent
+        try:
+            pgid = os.getpgid(main_proc.pid)
+            os.killpg(pgid, signal.SIGINT)
+            ret = main_proc.wait(timeout=grace_timeout)
+            logger.info(f"[{node_info.name}] Exited with code {ret}")
+        except subprocess.TimeoutExpired:
+            logger.warning(f"[{node_info.name}] Force killing after {grace_timeout}s.")
+            os.killpg(pgid, signal.SIGKILL)  # type: ignore
+            main_proc.wait()
+        except Exception as e:
+            logger.exception(f"[{node_info.name}] Error during termination: {e}")
+
+        # Cleanup leftover children (SIGKILL if necessary)
+        for child in children:
+            if child.is_running():
+                try:
+                    child.kill()
+                except psutil.NoSuchProcess:
+                    pass
 
     def list_nodes(self) -> list[str]:
         with self._lock:
             return list(self.nodes.keys())
 
-    def terminate_node(self, name: str, grace_timeout: float = 5.0):
-        """
-        Attempts graceful termination (SIGINT) of the node and all discovered children.
-        If the parent process does not exit within grace_timeout, we use SIGKILL.
-        """
-        with self._lock:
-            if name not in self.nodes:
-                logger.warning(f"Node '{name}' not found for termination.")
-                return
-            node_info = self.nodes[name]
-
-        process = node_info.process
-        child_processes = node_info.child_processes
-        events_queue = node_info.events_queue
-
-        logger.info(f"Terminating node '{name}' (PID={process.pid})")
-
-        try:
-            # ROS2 processes attach a SIGINT handler, so we send SIGINT
-            for child in child_processes:
-                if child.is_running():
-                    try:
-                        # Death to children 💀
-                        child.send_signal(signal.SIGINT)
-                        logger.debug(f"[{name}] Sent SIGINT to child PID={child.pid}")
-                    except psutil.NoSuchProcess:
-                        logger.debug(f"[{name}] Child PID={child.pid} already gone.")
-                    except Exception as e:
-                        logger.exception(f"[{name}] Error sending SIGINT to child: {e}")
-
-            # SIGINT parent 💀
-            try:
-                pgid = os.getpgid(process.pid)
-                os.killpg(pgid, signal.SIGINT)
-                logger.debug(f"[{name}] Sent SIGINT to PGID={pgid}")
-
-                ret_code = process.wait(timeout=grace_timeout)
-                logger.info(f"[{name}] Terminated gracefully with exit code={ret_code}")
-                events_queue.put(
-                    NodeEvent(type_="status", message="Terminated gracefully.")
-                )
-            except subprocess.TimeoutExpired:
-                logger.warning(
-                    f"[{name}] Did not terminate in {grace_timeout}s, sending SIGKILL."
-                )
-                try:
-                    os.killpg(pgid, signal.SIGKILL)
-                    process.wait()
-                except Exception as e:
-                    logger.exception(f"[{name}] Failed to force-kill: {e}")
-                else:
-                    logger.info(f"[{name}] Forcefully ki lled.")
-                    events_queue.put(
-                        NodeEvent(type_="status", message="Terminated forcefully.")
-                    )
-            except psutil.NoSuchProcess:
-                logger.info(f"[{name}] Already gone before SIGINT.")
-            except ProcessLookupError:
-                logger.info(f"[{name}] Process or group not found.")
-            except Exception as e:
-                logger.exception(f"[{name}] Unexpected error during termination: {e}")
-
-            # forcefully kill the children
-            for child in child_processes:
-                if child.is_running():
-                    try:
-                        child.kill()
-                        logger.debug(f"[{name}] Force-killed child PID={child.pid}")
-                    except psutil.NoSuchProcess:
-                        pass
-
-        finally:
-            with self._lock:
-                self.nodes.pop(name, None)
-                logger.info(f"[{name}] Removed from registry after termination.")
-
     def get_node_status(self, name: str) -> list[NodeEvent]:
         with self._lock:
             if name not in self.nodes:
-                raise ValueError(f"Node '{name}' is not running.")
-            events_queue = self.nodes[name].events_queue
+                raise ValueError(f"Node '{name}' not found.")
+            events_q = self.nodes[name].events_queue
 
-        messages: list[NodeEvent] = []
-        while not events_queue.empty():
-            messages.append(events_queue.get_nowait())
-        return messages
+        events: list[NodeEvent] = []
+        while not events_q.empty():
+            events.append(events_q.get_nowait())
+        return events

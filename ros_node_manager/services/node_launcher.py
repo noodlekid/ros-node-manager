@@ -5,16 +5,16 @@ import logging
 from queue import Queue
 from typing import Dict, Optional
 
-from .enviroment import merge_ros_env_with_system
 from ros_node_manager.models import NodeInfo, NodeEvent
+from ros_node_manager.services.enviroment import merge_ros_env_with_system
 
 logger = logging.getLogger(__name__)
 
 
 class NodeLauncher:
     """
-    Responsible solely for launching nodes (either `ros2 run` or `ros2 launch`)
-    and doing an initial child process discovery.
+    Responsible for launching nodes via 'ros2 run' or 'ros2 launch'.
+    Follows a minimal approach for clarity.
     """
 
     def __init__(self, default_timeout: float = 5.0):
@@ -30,101 +30,117 @@ class NodeLauncher:
         timeout: Optional[float] = None,
     ) -> NodeInfo:
         """
-        Launch either `ros2 run` (if executable is given)
-        or `ros2 launch` (if launch_file is given).
-        Returns a `NodeInfo` object with initial process references.
+        Launch a node. If 'executable' is specified, we use 'ros2 run'.
+        If 'launch_file' is specified, we use 'ros2 launch'.
         """
-        if (executable is None and launch_file is None) or (executable and launch_file):
-            raise ValueError("Specify exactly one of 'executable' or 'launch_file'.")
+        # Validate arguments
+        if bool(executable) == bool(launch_file):
+            raise ValueError(
+                "Exactly one of 'executable' or 'launch_file' must be provided."
+            )
 
         is_launch_file = launch_file is not None
-
-        # Build the command
-        if is_launch_file:
-            command = ["ros2", "launch", package, launch_file]
-        else:
-            # type check assitance
-            assert executable is not None
-            command = ["ros2", "run", package, executable]
-
-        # Append parameters
-        if parameters:
-            for k, v in parameters.items():
-                command.extend(["--ros-args", "-p", f"{k}:={v}"])
-
+        cmd = self._build_command(package, executable, launch_file, parameters)
         env = merge_ros_env_with_system()
 
-        logger.info(f"Launching node '{name}' with command: {' '.join(command)}")
-        for var in ["ROS_DOMAIN_ID", "RMW_IMPLEMENTATION"]:
-            logger.debug(f"{var}={env.get(var)}")
+        logger.info(f"Launching node '{name}' with command: {' '.join(cmd)}")
+        process = self._create_subprocess(cmd, env, name)
 
-        # Create the subprocess
+        events: Queue[NodeEvent] = Queue()
+        events.put(NodeEvent(type_="status", message="Node process launched."))
+
+        # Optionally discover child processes if we used a launch file
+        child_procs = []
+        launch_timeout = timeout or self.default_timeout
+        if is_launch_file:
+            child_procs = self._discover_children(
+                process.pid, name, launch_timeout, events
+            )
+
+        # Construct NodeInfo
+        node_info = NodeInfo(
+            name=name,
+            process=process,
+            child_processes=child_procs,
+            events_queue=events,
+            is_launch_file=is_launch_file,
+            state="running",
+        )
+        logger.info(f"Node '{name}' is now running (PID={process.pid}).")
+        return node_info
+
+    def _build_command(
+        self,
+        package: str,
+        executable: Optional[str],
+        launch_file: Optional[str],
+        parameters: Optional[Dict[str, str]],
+    ) -> list[str]:
+        """
+        Build the command array for subprocess.Popen, ensuring minimal complexity.
+        """
+        cmd: list[str] = []
+
+        if launch_file:
+            cmd = ["ros2", "launch", package, launch_file]
+        else:
+            assert executable
+            cmd = ["ros2", "run", package, executable]
+
+        # Attach parameters
+        if parameters:
+            for key, val in parameters.items():
+                cmd += ["--ros-args", "-p", f"{key}:={val}"]
+        return cmd
+
+    def _create_subprocess(
+        self, cmd: list[str], env: dict[str, str], node_name: str
+    ) -> subprocess.Popen[str]:
+        """
+        Create the subprocess with standard error handling.
+        """
         try:
-            process = subprocess.Popen(
-                command,
+            proc = subprocess.Popen(
+                cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 env=env,
                 start_new_session=True,
+                shell=False,
             )
-        except FileNotFoundError:
-            msg = f"Failed to start node '{name}': command not found."
-            logger.exception(msg)
-            raise RuntimeError(msg)
+        except FileNotFoundError as e:
+            msg = f"Failed to start node '{node_name}': {e}"
+            logger.error(msg)
+            raise
         except Exception as e:
-            msg = f"Failed to start node '{name}': {e}"
-            logger.exception(msg)
-            raise RuntimeError(msg)
+            logger.exception(f"Unexpected error launching node '{node_name}': {e}")
+            raise
+        return proc
 
-        events_queue: Queue[NodeEvent] = Queue()
-        events_queue.put(NodeEvent(type_="status", message="Node started."))
-
+    def _discover_children(
+        self, pid: int, node_name: str, timeout: float, events: Queue[NodeEvent]
+    ) -> list[psutil.Process]:
+        """
+        If using ros2 launch, attempt to find child processes.
+        """
         child_procs = []
-        launch_timeout = timeout if timeout is not None else self.default_timeout
-
-        if is_launch_file:
-            try:
-                parent_ps = psutil.Process(process.pid)
-                deadline = time.time() + launch_timeout
-                while time.time() < deadline:
-                    children = parent_ps.children(recursive=True)
-                    if children:
-                        child_procs = children
-                        break
-                    time.sleep(0.5)
-                if child_procs:
-                    pids = [c.pid for c in child_procs]
-                    logger.info(f"[{name}] Found initial child processes: {pids}")
-                    events_queue.put(
-                        NodeEvent(
-                            type_="status",
-                            message=f"Discovered initial children: {pids}",
-                        )
+        try:
+            parent_ps = psutil.Process(pid)
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                children = parent_ps.children(recursive=True)
+                if children:
+                    child_procs = children
+                    pid_list = [c.pid for c in child_procs]
+                    logger.info(f"[{node_name}] Found child processes: {pid_list}")
+                    events.put(
+                        NodeEvent(type_="status", message=f"Children: {pid_list}")
                     )
-                else:
-                    warning_msg = f"[{name}] No child processes detected within {launch_timeout} sec."
-                    logger.warning(warning_msg)
-                    events_queue.put(NodeEvent(type_="warning", message=warning_msg))
-            except psutil.NoSuchProcess:
-                # Could happen if parent disappeared instantly
-                error_msg = f"[{name}] Launch process died immediately."
-                logger.error(error_msg)
-                events_queue.put(NodeEvent(type_="error", message=error_msg))
-            except Exception as e:
-                # Catch any unexpected psutil errors
-                error_msg = f"[{name}] Error discovering child processes: {e}"
-                logger.exception(error_msg)
-                events_queue.put(NodeEvent(type_="error", message=error_msg))
-
-        node_info = NodeInfo(
-            name=name,
-            process=process,
-            child_processes=child_procs,
-            events_queue=events_queue,
-            is_launch_file=is_launch_file,
-            state="running",
-        )
-
-        logger.info(f"Node '{name}' is now running (PID={process.pid}).")
-        return node_info
+                    break
+                time.sleep(0.5)
+        except psutil.NoSuchProcess:
+            logger.warning(f"[{node_name}] Process died before child discovery.")
+        except Exception as e:
+            logger.exception(f"[{node_name}] Error discovering children: {e}")
+        return child_procs

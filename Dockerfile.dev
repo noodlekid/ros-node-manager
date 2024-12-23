@@ -1,0 +1,60 @@
+# Use the official ROS2 Humble base image
+FROM ros:humble-ros-core AS base
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies and development tools
+RUN apt-get update && apt-get install -y \
+    python3-pip \
+    python3-venv \
+    ros-humble-rosbridge-server \
+    ros-humble-ros2cli-common-extensions \
+    bash-completion \
+    git \
+    nano \
+    tree \
+    curl \
+    wget \
+    vim \
+    zsh \
+    htop \
+    tmux \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Oh My Zsh for an enhanced shell experience
+RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+
+# Set Zsh as the default shell
+RUN chsh -s /usr/bin/zsh
+
+# Install Poetry
+RUN curl -sSL https://install.python-poetry.org | python3 -
+
+# Add Poetry to PATH
+ENV PATH="/root/.local/bin:${PATH}"
+
+# Set working directory
+WORKDIR /app
+
+# Copy Poetry configuration files
+COPY pyproject.toml poetry.lock ./
+
+# Configure Poetry to install dependencies in the system environment
+RUN poetry config virtualenvs.create false && \
+    poetry install --no-root
+
+# Copy the rest of the application code
+COPY . .
+
+# Expose necessary ports
+EXPOSE 8000 9090
+
+# Copy and set the entrypoint
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Define the entrypoint
+ENTRYPOINT ["/entrypoint.sh"]
+
+# Default command for development (interactive Zsh shell)
+CMD ["zsh"]
